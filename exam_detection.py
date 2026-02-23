@@ -87,8 +87,8 @@ def detect_on_frame(source: str, frame_bgr):
 
     st.session_state[frame_key] += 1
 
-    # Run heavy detection only every 5 frames
-    if st.session_state[frame_key] % 5 != 0:
+    # Run heavy detection every 3 frames for better responsiveness.
+    if st.session_state[frame_key] % 3 != 0:
         return st.session_state.feed_signals[source]
 
     # --------------------------------------------------------------- #
@@ -200,7 +200,7 @@ def detect_on_frame(source: str, frame_bgr):
         # ---------------- RULE SCORE ---------------- #
 
         rule_mobile = hand_near_head or (downward_alert and hand_low_hold)
-        rule_score = 0.8 if rule_mobile else 0.0
+        rule_score = 0.9 if rule_mobile else 0.0
 
         # ---------------- YOLO DETECTION ---------------- #
 
@@ -227,7 +227,7 @@ def detect_on_frame(source: str, frame_bgr):
         final_score = (rule_weight * rule_score) + (model_weight * yolo_conf)
         st.session_state.feed_risk_scores[source] = final_score
 
-        signals["mobile"] = signals["mobile"] or (final_score > 0.55)
+        signals["mobile"] = signals["mobile"] or (final_score > 0.42)
 
     # ---------------- PAPER DETECTION ---------------- #
 
@@ -263,7 +263,7 @@ def detect_on_frame(source: str, frame_bgr):
     paper_count = smooth_counter(source, "paper", signals["paper"])
     turn_count = smooth_counter(source, "head_turn", signals["head_turn"])
 
-    mobile_alert = mobile_count >= 3
+    mobile_alert = mobile_count >= 2
     talking_alert = talking_count >= 5
     paper_alert = paper_count >= 4
     turn_alert = turn_count >= 5
@@ -278,9 +278,9 @@ def detect_on_frame(source: str, frame_bgr):
         + 0.05 * int(turn_alert)
     )
 
-    if risk_score > 0.75:
+    if risk_score > 0.72:
         severity = "HIGH ALERT"
-    elif risk_score > 0.5:
+    elif risk_score > 0.44:
         severity = "ALERT"
     elif risk_score > 0.3:
         severity = "WARNING"
@@ -288,7 +288,7 @@ def detect_on_frame(source: str, frame_bgr):
         severity = "NORMAL"
 
     feed_text = {
-        "mobile": f"Mobile risk {final_score:.2f}" if mobile_alert else "No mobile signal",
+        "mobile": f"Possible mobile usage (risk {final_score:.2f})" if mobile_alert else "No mobile signal",
         "talking": "Talking detected" if talking_alert else "No talking signal",
         "paper": "Paper detected in desk zone" if paper_alert else "No paper signal",
         "head_turn": "Repeated head turning" if turn_alert else "No head-turn signal",

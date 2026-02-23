@@ -13,19 +13,42 @@ def source_to_capture_arg(source: str):
     return int(source) if source.isdigit() else source
 
 
+def is_network_source(source: str) -> bool:
+    s = source.strip().lower()
+    return s.startswith(("rtsp://", "http://", "https://"))
+
+
+def _try_open(arg, backend: int):
+    cap = cv2.VideoCapture(arg, backend)
+    if cap is None or not cap.isOpened():
+        if cap is not None:
+            cap.release()
+        return None
+    return cap
+
+
+def _warmup_read(cap, attempts: int = 6, delay: float = 0.05) -> bool:
+    # Some cameras need a few frames before read() returns valid data.
+    for _ in range(attempts):
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return True
+        time.sleep(delay)
+    return False
+
+
 def scan_cameras() -> list[str]:
     found = []
     for idx in range(MAX_SCAN_INDEX):
-        cap = cv2.VideoCapture(idx, cv2.CAP_MSMF)
-        if not cap.isOpened():
-            cap.release()
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-        ok = cap.isOpened()
-        if ok:
-            read_ok, _ = cap.read()
-            if read_ok:
+        cap = _try_open(idx, cv2.CAP_DSHOW)
+        if cap is None:
+            cap = _try_open(idx, cv2.CAP_MSMF)
+        if cap is None:
+            cap = _try_open(idx, cv2.CAP_ANY)
+        if cap is not None:
+            if _warmup_read(cap):
                 found.append(str(idx))
-        cap.release()
+            cap.release()
     return found
 
 
@@ -52,16 +75,28 @@ def release_all_captures() -> None:
 
 def _open_capture(source: str):
     arg = source_to_capture_arg(source)
-    # MSMF is usually smoother on newer Windows camera stacks; fallback to DSHOW.
-    cap = cv2.VideoCapture(arg, cv2.CAP_MSMF)
-    if not cap.isOpened():
-        cap.release()
-        cap = cv2.VideoCapture(arg, cv2.CAP_DSHOW)
+    if isinstance(arg, int):
+        # DSHOW is often more stable with USB webcams; fall back as needed.
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+    elif is_network_source(source):
+        # Network streams are more reliable through FFmpeg / generic backend.
+        backends = [cv2.CAP_FFMPEG, cv2.CAP_ANY]
+    else:
+        backends = [cv2.CAP_ANY]
+
+    cap = None
+    for backend in backends:
+        cap = _try_open(arg, backend)
+        if cap is not None:
+            break
+    if cap is None:
+        cap = cv2.VideoCapture(arg)
     return cap
 
 
 def _worker_loop(source: str, state: dict) -> None:
     cap = None
+    read_fail_streak = 0
     while not state["stop_event"].is_set():
         if cap is None:
             cap = _open_capture(source)
@@ -77,9 +112,21 @@ def _worker_loop(source: str, state: dict) -> None:
                     state["status"] = "Unavailable"
                 time.sleep(1.2)
                 continue
+            if not _warmup_read(cap):
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                cap = None
+                with state["lock"]:
+                    state["status"] = "Warming up"
+                time.sleep(0.4)
+                continue
+            read_fail_streak = 0
 
         ok, frame = cap.read()
         if ok and frame is not None:
+            read_fail_streak = 0
             with state["lock"]:
                 state["frame"] = frame
                 state["status"] = "Connected"
@@ -88,14 +135,20 @@ def _worker_loop(source: str, state: dict) -> None:
             time.sleep(0.01)
             continue
 
+        read_fail_streak += 1
         with state["lock"]:
             state["status"] = "Reconnecting"
+        # Tolerate short transient failures before reopening the device.
+        if read_fail_streak < 3:
+            time.sleep(0.03)
+            continue
         try:
             cap.release()
         except Exception:
             pass
         cap = None
-        time.sleep(0.15)
+        read_fail_streak = 0
+        time.sleep(0.2)
 
     if cap is not None:
         try:
