@@ -1,0 +1,13 @@
+AI Exam Monitoring - Camera Report
+Session started: 2026-02-22 20:12:34
+Generated at: 2026-02-22 20:13:24
+Camera source: 0
+Candidate: Candidate 0
+Resume: N/A
+Captured face image: snapshots\camera_0_face_20260222_201324.jpg
+Incidents on this camera: 0
+Mobile usage alerts: 0
+Talking alerts: 0
+Paper alerts: 0
+Head-turn alerts: 0
+Final decision should be made by the invigilator.
